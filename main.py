@@ -212,7 +212,7 @@ def main():
     ret_f1_array=f1_score(ret_precision_array, ret_recall_array)
     ret_f1_mean=round(np.mean(ret_f1_array), 2)
   
-    print(f"ASR: {asr}")
+    print(f"*********ASR: {asr}")
     print(f"ASR Mean: {asr_mean}\n") 
 
     print(f"Ret: {ret_list}")

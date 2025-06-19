@@ -52,7 +52,7 @@ test_params = {
     'query_results_dir': 'main',
 
     # LLM setting
-    'model_name': 'palm2', 
+    'model_name': 'llama7b', 
     'use_truth': False,
     'top_k': 5,
     'gpu_id': 0,
@@ -61,8 +61,8 @@ test_params = {
     'attack_method': 'LM_targeted',
     'adv_per_query': 5,
     'score_function': 'dot',
-    'repeat_times': 10,
-    'M': 10,
+    'repeat_times': 5,
+    'M': 5,
     'seed': 12,
 
     'note': None

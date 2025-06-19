@@ -7,6 +7,8 @@ __pycache__/
 *.so
 
 model_configs/llama7b_config.json
+model_configs/*.json
+
 
 # Distribution / packaging
 .Python
