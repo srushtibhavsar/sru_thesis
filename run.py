@@ -68,6 +68,6 @@ test_params = {
     'note': None
 }
 
-for dataset in ['nq', 'hotpotqa', 'msmarco']:
-    test_params['eval_dataset'] = dataset
-    run(test_params)
+# for dataset in ['nq', 'hotpotqa', 'msmarco']:
+#     test_params['eval_dataset'] = dataset
+run(test_params)
