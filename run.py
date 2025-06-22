@@ -27,7 +27,7 @@ def run(test_params):
 
 def get_log_name(test_params):
     # Generate a log file name
-    os.makedirs(f"/home/sbhavsar/PoisionedRAG_2/perplexity_defense/th_10/{test_params['query_results_dir']}_logs", exist_ok=True)
+    os.makedirs(f"/home/sbhavsar/PoisionedRAG_2/perplexity/th_10/{test_params['query_results_dir']}_logs", exist_ok=True)
 
     if test_params['use_truth']:
         log_name = f"{test_params['eval_dataset']}-{test_params['eval_model_code']}-{test_params['model_name']}-Truth--M{test_params['M']}x{test_params['repeat_times']}"
@@ -40,7 +40,7 @@ def get_log_name(test_params):
     if test_params['note'] != None:
         log_name = test_params['note']
     
-    return f"/home/sbhavsar/PoisionedRAG_2/perplexity_defense/th_10/{test_params['query_results_dir']}_logs/{log_name}.txt", log_name
+    return f"/home/sbhavsar/PoisionedRAG_2/perplexity/th_10/{test_params['query_results_dir']}_logs/{log_name}.txt", log_name
 
 
 
@@ -54,15 +54,15 @@ test_params = {
     # LLM setting
     'model_name': 'llama7b', 
     'use_truth': False,
-    'top_k': 5,
-    'gpu_id': 0,
+    'top_k': 10,
+    'gpu_id': 1,
 
     # attack
     'attack_method': 'LM_targeted',
     'adv_per_query': 5,
     'score_function': 'dot',
-    'repeat_times': 5,
-    'M': 5,
+    'repeat_times': 10,
+    'M': 10,
     'seed': 12,
 
     'note': None
