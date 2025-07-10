@@ -11,14 +11,6 @@ from src.attack import Attacker
 from src.prompts import wrap_prompt
 import torch
 from sklearn.cluster import DBSCAN  # ➕ Required for Trust-RAG
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from sklearn.decomposition import PCA
-from sklearn.metrics.pairwise import cosine_similarity
-import matplotlib.pyplot as plt
-import numpy as np
-
 
 import openai
 from dotenv import load_dotenv
@@ -88,6 +80,7 @@ def matches_poisoned_answer(response, poisoned_answer, question):
         print(f"Equivalence check failed: {e}")
         return clean_str(poisoned_answer) in clean_str(response)
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description='test')
 
@@ -100,13 +93,13 @@ def parse_args():
 
     # LLM settings
     parser.add_argument('--model_config_path', default=None, type=str)
-    parser.add_argument('--model_name', type=str, default='palm2')
+    parser.add_argument('--model_name', type=str, default='llama7b')
     parser.add_argument('--top_k', type=int, default=5)
     parser.add_argument('--use_truth', type=str, default='False')
     parser.add_argument('--gpu_id', type=int, default=0)
 
     # attack
-    parser.add_argument('--attack_method', type=str, default='LM_targeted')
+    parser.add_argument('--attack_method', type=str, default='hotflip')
     parser.add_argument('--adv_per_query', type=int, default=5, help='The number of adv texts for each target query.')
     parser.add_argument('--score_function', type=str, default='dot', choices=['dot', 'cos_sim'])
     parser.add_argument('--repeat_times', type=int, default=10, help='repeat several times to compute average')
@@ -118,75 +111,61 @@ def parse_args():
     print(args)
     return args
 
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 
-def filter_with_trustrag(texts, tokenizer, get_emb_func, eps=0.5, min_samples=2, query_text=None, min_contexts=3):
+def filter_with_trustrag(texts, tokenizer, get_emb_func, eps=0.5, min_samples=2, question_id=None):
     if len(texts) <= 1:
-        return texts, [], list(range(len(texts))), texts
+        return texts, []  # no filtering possible
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(device)
-    
+    inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to("cuda")
     with torch.no_grad():
-        embs = get_emb_func(None, inputs.to(device)).cpu().numpy()
+        embs = get_emb_func(None, inputs).cpu().numpy()
 
-    # DBSCAN Clustering
     clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(embs)
     labels = clustering.labels_
 
-    # Count valid clusters
     label_counts = {label: list(labels).count(label) for label in set(labels) if label != -1}
-    print(f"[Trust-RAG] Cluster labels: {labels}")
-    print(f"[Trust-RAG] Cluster label counts: {label_counts}")
+    if not label_counts:
+        return texts, []  # no clusters found
 
-    filtered_indices = []
+    majority_label = max(label_counts, key=label_counts.get)
+    filtered = [text for text, label in zip(texts, labels) if label == majority_label]
+    filtered_out = [text for text, label in zip(texts, labels) if label != majority_label]
 
-    if label_counts:
-        # Select the largest cluster
-        majority_label = max(label_counts, key=label_counts.get)
-        filtered_indices = [i for i, label in enumerate(labels) if label == majority_label]
-
-    # If no valid clusters or not enough context, use top-K similarity
-    if query_text and len(filtered_indices) < min_contexts:
-        query_input = tokenizer([query_text], padding=True, truncation=True, return_tensors="pt").to(device)
-        with torch.no_grad():
-            query_emb = get_emb_func(None, query_input).cpu().numpy()
-
-        sims = cosine_similarity(query_emb, embs)[0]
-        ranked = np.argsort(sims)[::-1]
-        for idx in ranked:
-            if idx not in filtered_indices:
-                filtered_indices.append(idx)
-            if len(filtered_indices) >= min_contexts:
-                break
-
-    # If still no filtering happened (e.g., all are noise and no query), fall back
-    if not filtered_indices:
-        print("[Trust-RAG] No valid clusters or similarity fallback. Returning original texts.")
-        return texts, [], list(range(len(texts))), texts
-
-    filtered = [texts[i] for i in filtered_indices]
-    filtered_out = [texts[i] for i in range(len(texts)) if i not in filtered_indices]
-
-    # Save PCA plot
+    # 🔽 Plotting
     try:
         pca = PCA(n_components=2)
-        reduced_embs = pca.fit_transform(embs)
+        reduced = pca.fit_transform(embs)
         plt.figure(figsize=(8, 6))
         for i, label in enumerate(labels):
-            color = 'blue' if i in filtered_indices else 'orange'
-            marker = 'o'
-            plt.scatter(reduced_embs[i, 0], reduced_embs[i, 1], color=color, marker=marker)
-            plt.text(reduced_embs[i, 0], reduced_embs[i, 1], str(i), fontsize=9)
-
-        plt.title("Trust-RAG Clustering (PCA Reduced)")
+            color = 'blue' if label == majority_label else 'orange'
+            plt.scatter(reduced[i][0], reduced[i][1], c=color)
+            plt.text(reduced[i][0], reduced[i][1], str(i), fontsize=8)
+        plt.title("Trust-RAG Clustering")
+        plt.xlabel("PCA 1")
+        plt.ylabel("PCA 2")
         plt.legend(handles=[
-            plt.Line2D([0], [0], marker='o', color='w', label='Filtered', markerfacecolor='blue'),
+            plt.Line2D([0], [0], marker='o', color='w', label='Kept', markerfacecolor='blue'),
             plt.Line2D([0], [0], marker='o', color='w', label='Filtered Out', markerfacecolor='orange')
         ])
+        if question_id:
+            plot_path = f"trust_rag_plots/q_{question_id}.png"
+        else:
+            plot_path = f"trust_rag_plots/cluster_plot.png"
+        os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+        plt.savefig(plot_path)
+        plt.close()
+        print(f"[Trust-RAG] PCA plot saved to: {plot_path}")
     except Exception as e:
         print(f"[Trust-RAG] PCA plotting failed: {e}")
 
-    return filtered, filtered_out, filtered_indices, texts
+    print(f"[Trust-RAG] Filtered {len(texts)} → {len(filtered)} based on majority cluster.")
+    print(f"[Trust-RAG] Filtered-out docs:")
+    for doc in filtered_out:
+        print(f"⛔ {doc[:150]}...\n")
+
+    return filtered, filtered_out
 
 
 
@@ -196,19 +175,22 @@ def main():
     torch.cuda.set_device(args.gpu_id)
     device = 'cuda'
     setup_seeds(args.seed)
-    if args.model_config_path == None:
+    if args.model_config_path is None:
         args.model_config_path = f'model_configs/{args.model_name}_config.json'
 
     # load target queries and answers
     if args.eval_dataset == 'msmarco':
-        args.split = 'train'
+        corpus, queries, qrels = load_beir_datasets('msmarco', 'train')
+        incorrect_answers = load_json(f'results/adv_targeted_results/{args.eval_dataset}.json')
+        random.shuffle(incorrect_answers)
+    else:
+        corpus, queries, qrels = load_beir_datasets(args.eval_dataset, args.split)
+        incorrect_answers = load_json(f'results/adv_targeted_results/{args.eval_dataset}.json')
 
-    corpus, queries, qrels = load_beir_datasets(args.eval_dataset, args.split)
-    incorrect_answers = load_json(f'results/adv_targeted_results/{args.eval_dataset}.json')
     incorrect_answers = list(incorrect_answers.values())
 
     # load BEIR top_k results  
-    if args.orig_beir_results is None: 
+    if args.orig_beir_results is None:
         print(f"Please evaluate on BEIR first -- {args.eval_model_code} on {args.eval_dataset}")
         # Try to get beir eval results from ./beir_results
         print("Now try to get beir eval results from results/beir_results/...")
@@ -222,17 +204,16 @@ def main():
         print(f"Automatically get beir_resutls from {args.orig_beir_results}.")
     with open(args.orig_beir_results, 'r') as f:
         results = json.load(f)
-    # assert len(qrels) <= len(results)
     print('Total samples:', len(results))
-
 
     if args.use_truth == 'True':
         args.attack_method = None
-
+        
     if args.attack_method not in [None, 'None']:
-        # Load retrieval models
+    # Load retrieval models
+
         model, c_model, tokenizer, get_emb = load_models(args.eval_model_code)
-        model.eval()
+        model.eval() #!#.eval() is a PyTorch method that switches the models to evaluation mode, which is used during inference. This disables certain behaviors specific to training, such as dropout layers and batch normalization, ensuring consistent outputs.
         model.to(device)
         c_model.eval()
         c_model.to(device) 
@@ -241,7 +222,6 @@ def main():
                             c_model=c_model,
                             tokenizer=tokenizer,
                             get_emb=get_emb) 
-    
     llm = create_model(args.model_config_path)
 
     all_results = []
@@ -278,6 +258,7 @@ def main():
         functionality_correctness = 0
         ans_availability = 0
         incorrect_answer_by_self_rag =0
+
 
         for i in target_queries_idx:
             iter_idx = i - iter * args.M
@@ -323,34 +304,25 @@ def main():
                 adv_text_set = set()
 
 
-            topk_contents, filtered_out_docs, filtered_indices, original_texts = filter_with_trustrag(
-                topk_contents, tokenizer, lambda _, x: get_emb(model, x),
-                query_text=question, min_contexts=3
+            topk_contents, filtered_out_docs = filter_with_trustrag(
+                topk_contents,
+                tokenizer,
+                lambda _, x: get_emb(model, x),
+                question_id=incorrect_answers[i]['id']  # pass question ID for plot filename
             )
-
-            plt.savefig(f"trust_rag_cluster_iter{iter_idx}_q{question[:30].replace(' ', '_')}.png")
-            for idx in filtered_indices:
-                print(f"[Doc {idx}] {original_texts[idx][:200]}...\n")
-
-            print("[Trust-RAG] Saved clustering plot to file.")
-            print("📌 Filtered document indices (on plot):", filtered_indices)
-
-
             
-            if len(topk_contents) < 2:
-                print(f"[Warning] Only {len(topk_contents)} contexts remain after Trust-RAG filtering (original top_k = {args.top_k}).")
+            print("🔍 Unfiltered Documents (kept):")
+            for idx, doc in enumerate(topk_contents, start=1):
+                print(f"{idx}. {doc[:200]}...\n")  # Trimmed for readability
 
-            for idx in range(len(original_texts)):
-                if idx not in filtered_indices:
-                    print(f"[Filtered-Out Doc {idx}] {original_texts[idx][:200]}...\n")
+            print("🛑 Filtered-out Documents (removed by Trust-RAG):")
+            for idx, doc in enumerate(filtered_out_docs, start=1):
+                print(f"{idx}. {doc[:200]}...\n")  # Trimmed for readability
 
-                        
+
             query_prompt = wrap_prompt(question, topk_contents, prompt_id=4)
-            
-            #print("@@@@@@@@@@@@@@@@@@ ",query_prompt)
             response = llm.query(query_prompt)
             print(f'Output: {response}\n\n')
-            print(f"correct Answer: {incorrect_answers[i]['correct answer']}\n\n")
             injected_adv = [i for i in topk_contents if i in adv_text_set]
             iter_results.append({
                 "id": incorrect_answers[i]['id'],
@@ -417,7 +389,6 @@ def main():
     print(f"functionality correctness mean: {func_correct_mean}")
     print(f"Answer Availability mean: {ans_avail_mean}")
     print(f"Incorrect Answer by Self RAG: {incor_answer_by_self_rag_mean}\n")
-    
 
     print(f"Ret: {ret_list}")
     print(f"Precision mean: {ret_precision_mean}")
